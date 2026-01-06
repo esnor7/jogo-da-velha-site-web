@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jogo da Velha Online</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <audio id="bgMusic" loop>
+        <source src="Run As Fast As You Can - Pix.mp3" type="audio/mpeg">
+    </audio>
+
+    <div id="screen-login" class="container">
+        <h2>ENTRAR</h2>
+        <input type="text" id="username" placeholder="Digite seu apelido...">
+        <button onclick="enterLobby()">ENTRAR NO LOBBY</button>
+    </div>
+
+    <div id="screen-rooms" class="container hidden">
+        <h3>SESSÕES</h3>
+        <div id="rooms-list"></div>
+        <div id="lobby-controls" class="hidden">
+            <p id="wait-msg" style="color: #666; font-size: 13px; margin-bottom: 15px;">Aguardando oponente...</p>
+            <button id="btn-start" class="btn-start hidden" onclick="initiateGame()">INICIAR PARTIDA</button>
+            <button class="btn-exit" onclick="standUp()">SAIR DO LUGAR</button>
+        </div>
+        <button class="btn-exit" style="margin-top: 20px;" onclick="location.reload()">VOLTAR AO INÍCIO</button>
+    </div>
+
+    <div id="screen-game" class="container hidden">
+        <div id="turn-display" style="color: #2ed573; margin-bottom: 15px;">Aguarde...</div>
+        <div class="board">
+            <div class="cell" onclick="handlePlay(0)"></div>
+            <div class="cell" onclick="handlePlay(1)"></div>
+            <div class="cell" onclick="handlePlay(2)"></div>
+            <div class="cell" onclick="handlePlay(3)"></div>
+            <div class="cell" onclick="handlePlay(4)"></div>
+            <div class="cell" onclick="handlePlay(5)"></div>
+            <div class="cell" onclick="handlePlay(6)"></div>
+            <div class="cell" onclick="handlePlay(7)"></div>
+            <div class="cell" onclick="handlePlay(8)"></div>
+        </div>
+        <div id="result-text" class="hidden"></div>
+        <button id="btn-reset" class="hidden" onclick="requestReset()">REINICIAR</button>
+        <button class="btn-exit" onclick="location.reload()">SAIR DA SALA</button>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+        import { getDatabase, ref, set, onValue, update, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAMPqH-lyB4X_whlGIW189rd5KVi2fM-IE",
+            authDomain: "jogo-da-velha-online-36836.firebaseapp.com",
+            databaseURL: "https://jogo-da-velha-online-36836-default-rtdb.firebaseio.com",
+            projectId: "jogo-da-velha-online-36836",
+            storageBucket: "jogo-da-velha-online-36836.firebasestorage.app",
+            messagingSenderId: "1067127105922",
+            appId: "1:1067127105922:web:18a6a4f194711d4973479b"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let myName = "";
+        let myRoom = null;
+        let mySeat = null;
+        let mySym = "";
+
+        window.enterLobby = () => {
+            const input = document.getElementById('username').value;
+            myName = input || "Anon" + Math.floor(Math.random()*999);
+            document.getElementById('screen-login').classList.add('hidden');
+            document.getElementById('screen-rooms').classList.remove('hidden');
+            const music = document.getElementById('bgMusic');
+            music.volume = 0.1;
+            music.play();
+            watchRooms();
+        };
+
+        function watchRooms() {
+            onValue(ref(db, 'rooms/'), (snap) => {
+                const rooms = snap.val();
+                const list = document.getElementById('rooms-list');
+                list.innerHTML = "";
+                
+                for(let i=1; i<=2; i++){
+                    const r = rooms?.[`sala${i}`];
+                    list.innerHTML += `
+                        <div class="room-box">
+                            <span style="font-size:11px; color:#555;">SALA ${i}</span>
+                            <div class="seat ${r?.p1 ? 'occupied' : ''}" onclick="occupySeat(${i}, 'p1')">P1: ${r?.p1?.name || 'Vago'}</div>
+                            <div class="seat ${r?.p2 ? 'occupied' : ''}" onclick="occupySeat(${i}, 'p2')">P2: ${r?.p2?.name || 'Vago'}</div>
+                        </div>
+                    `;
+                    if(myRoom === `sala${i}` && r?.active) openGame(r);
+                }
+            });
+        }
+
+        window.occupySeat = (id, seat) => {
+            if(mySeat) return;
+            const path = `rooms/sala${id}/${seat}`;
+            onValue(ref(db, path), (snap) => {
+                if(!snap.exists()){
+                    myRoom = `sala${id}`;
+                    mySeat = seat;
+                    set(ref(db, path), { name: myName });
+                    onDisconnect(ref(db, path)).remove();
+                    document.getElementById('lobby-controls').classList.remove('hidden');
+                    checkIfPlayersReady();
+                }
+            }, {onlyOnce: true});
+        };
+
+        function checkIfPlayersReady() {
+            onValue(ref(db, `rooms/${myRoom}`), (snap) => {
+                const d = snap.val();
+                const btn = document.getElementById('btn-start');
+                if(d?.p1 && d?.p2 && !d?.active){
+                    if(mySeat === 'p1') btn.classList.remove('hidden');
+                    document.getElementById('wait-msg').innerText = "Oponente conectado!";
+                } else {
+                    btn.classList.add('hidden');
+                    document.getElementById('wait-msg').innerText = "Aguardando oponente...";
+                }
+            });
+        }
+
+        window.initiateGame = () => {
+            const ss = Math.random() > 0.5 ? ['X','O'] : ['O','X'];
+            update(ref(db, `rooms/${myRoom}`), {
+                active: true, board: Array(9).fill(""),
+                p1Sym: ss[0], p2Sym: ss[1],
+                turn: 'p1', winner: null
+            });
+        };
+
+        function openGame(data) {
+            document.getElementById('screen-rooms').classList.add('hidden');
+            document.getElementById('screen-game').classList.remove('hidden');
+            
+            mySym = (mySeat === 'p1') ? data.p1Sym : data.p2Sym;
+            const cells = document.querySelectorAll('.cell');
+            data.board.forEach((v, i) => cells[i].innerText = v);
+
+            const display = document.getElementById('turn-display');
+            if(data.winner){
+                const res = document.getElementById('result-text');
+                res.classList.remove('hidden');
+                if(data.winner === 'draw') res.innerText = "EMPATE 🤝";
+                else res.innerHTML = (data.winner === mySeat) ? "<span class='anim-win'>VITÓRIA 🏆</span>" : "<span class='anim-lose'>DERROTA ❌</span>";
+                display.innerText = "Partida encerrada";
+                if(mySeat === 'p1') document.getElementById('btn-reset').classList.remove('hidden');
+            } else {
+                display.innerText = (data.turn === mySeat) ? `SUA VEZ (${mySym})` : "VEZ DO OPONENTE...";
+                document.getElementById('result-text').classList.add('hidden');
+                document.getElementById('btn-reset').classList.add('hidden');
+            }
+        }
+
+        window.handlePlay = (i) => {
+            onValue(ref(db, `rooms/${myRoom}`), (snap) => {
+                const d = snap.val();
+                if(d.turn !== mySeat || d.board[i] !== "" || d.winner) return;
+                const nb = [...d.board];
+                nb[i] = mySym;
+                const win = calculateWin(nb);
+                update(ref(db, `rooms/${myRoom}`), {
+                    board: nb, turn: mySeat === 'p1' ? 'p2' : 'p1',
+                    winner: win ? (win === 'draw' ? 'draw' : mySeat) : null
+                });
+            }, {onlyOnce: true});
+        };
+
+        function calculateWin(b) {
+            const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+            for(let l of lines) if(b[l[0]] && b[l[0]]==b[l[1]] && b[l[0]]==b[l[2]]) return true;
+            return b.includes("") ? null : 'draw';
+        }
+
+        window.standUp = () => {
+            remove(ref(db, `rooms/${myRoom}/${mySeat}`));
+            myRoom = null; mySeat = null;
+            document.getElementById('lobby-controls').classList.add('hidden');
+        };
+
+        window.requestReset = () => update(ref(db, `rooms/${myRoom}`), { active: false, winner: null });
+    </script>
+</body>
+</html>
